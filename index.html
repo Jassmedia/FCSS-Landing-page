@@ -846,9 +846,7 @@ form.addEventListener('submit', async e => {
     if (!data.ok) throw new Error(data.error || 'Server error');
     await fireConversion(email, fullPhone, data.leadId);
     const first = name.split(' ')[0];
-    showMessage(/^No/.test(availability)
-      ? `Thanks, ${first}! We'll message you on WhatsApp (+${fullPhone}) with the next demo date.`
-      : `Thanks, ${first}! You're registered. Check WhatsApp on +${fullPhone} for the confirmation.`, true);
+    showMessage(`Registration successful! Thank you, ${first}.`, true);
     form.reset();
     countrySel.value = iso; updateCountryDisplay();
   } catch (err) {
