@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<!-- Only this folder's own files may run, and data may only come from Google Apps Script -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src https://script.google.com https://script.googleusercontent.com; base-uri 'none'; form-action 'none'">
+<title>ASTS FCCS Admin Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a1f5c'/%3E%3Crect x='7' y='17' width='4' height='8' rx='1' fill='%23ffd21f'/%3E%3Crect x='14' y='11' width='4' height='14' rx='1' fill='%23ffffff'/%3E%3Crect x='21' y='6' width='4' height='19' rx='1' fill='%23ffffff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="admin.css">
+<!-- The Apps Script /exec URL is set in config.js -->
+<script src="config.js"></script>
+<script src="admin.js" defer></script>
+</head>
+<body>
+
+<p id="boot" class="boot">
+  Loading the dashboard… If this message stays, open the page through http:// or https:// instead of
+  double-clicking the file (see apps-script/README.md).
+</p>
+
+<!-- ===================== Not connected yet ===================== -->
+<main id="setupView" class="center-view" hidden>
+  <section class="card center-card">
+    <div class="brand brand-dark"><span class="brand-mark">ASTS</span><span>FCCS Admin Dashboard</span></div>
+    <h1>Connect the dashboard</h1>
+    <p id="setupMessage">Paste the real Apps Script <strong>/exec</strong> URL into <code>admin/config.js</code>
+      (<code>ADMIN_CONFIG.APPS_SCRIPT_URL</code>), then reload this page.</p>
+    <p class="muted">It must be the same URL as <code>ASTS_CONFIG.APPS_SCRIPT_URL</code> in <code>index.html</code>.
+      Step-by-step instructions: <code>apps-script/README.md</code>.</p>
+  </section>
+</main>
+
+<!-- ===================== Sign in ===================== -->
+<main id="loginView" class="center-view" hidden>
+  <form id="loginForm" class="card center-card" novalidate>
+    <div class="brand brand-dark"><span class="brand-mark">ASTS</span><span>FCCS Admin Dashboard</span></div>
+    <h1>Sign in</h1>
+    <p class="muted">Enter your admin key. It is the <code>ADMIN_KEY</code> value in Apps Script:
+      Project Settings → Script properties.</p>
+    <!-- Lets your browser's password manager remember the key if you choose -->
+    <input class="visually-hidden" type="text" name="username" value="ASTS FCCS admin" autocomplete="username" tabindex="-1" aria-hidden="true" readonly>
+    <label class="field-label" for="adminKey">Admin key</label>
+    <input class="input" id="adminKey" name="password" type="password" autocomplete="current-password" spellcheck="false" required>
+    <button class="btn btn-primary btn-block" id="loginBtn" type="submit">Sign in</button>
+    <p class="form-error" id="loginError" role="alert" hidden></p>
+    <p class="fine-print">The key stays only in this tab's memory. It is sent inside the encrypted request body,
+      never in the URL, and this page never saves it. Reloading or closing the tab signs you out.</p>
+  </form>
+</main>
+
+<!-- ===================== Dashboard ===================== -->
+<div id="appView" hidden>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div class="brand"><span class="brand-mark">ASTS</span><span>FCCS Admin Dashboard</span></div>
+      <div class="topbar-actions">
+        <span class="last-updated" id="lastUpdated" aria-live="polite">Last Updated: —</span>
+        <button type="button" class="btn btn-light" id="refreshBtn"><span class="spinner" aria-hidden="true"></span><span>Refresh</span></button>
+        <button type="button" class="btn btn-ghost" id="signOutBtn">Sign out</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="filters">
+    <div class="wrap filters-inner">
+      <div class="segmented" role="group" aria-label="Period" id="periods">
+        <button type="button" data-period="today" aria-pressed="false">Today</button>
+        <button type="button" data-period="yesterday" aria-pressed="false">Yesterday</button>
+        <button type="button" data-period="7d" aria-pressed="false">Last 7 Days</button>
+        <button type="button" data-period="30d" aria-pressed="false">Last 30 Days</button>
+        <button type="button" data-period="all" aria-pressed="true">All Time</button>
+        <button type="button" data-period="custom" aria-pressed="false">Custom</button>
+      </div>
+      <form class="custom-range" id="customRange" novalidate hidden>
+        <label>From <input class="input" type="date" id="customFrom" required></label>
+        <label>To <input class="input" type="date" id="customTo" required></label>
+        <button class="btn btn-primary" type="submit">Apply</button>
+      </form>
+      <p class="period-label" id="periodLabel"></p>
+    </div>
+  </div>
+
+  <main class="wrap content" id="content">
+    <p class="banner" id="statusBanner" role="status" hidden></p>
+
+    <div class="panel">
+      <div class="kpi-grid" id="kpis"></div>
+
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>Registered leads</h2>
+            <p class="card-sub" id="leadsSub"></p>
+          </div>
+          <button type="button" class="btn btn-light" id="exportBtn">Download CSV</button>
+        </div>
+        <div class="table-tools">
+          <input class="input search" type="search" id="search" placeholder="Search name, phone, email, lead ID…" aria-label="Search leads">
+          <select class="input" id="roleFilter" aria-label="Filter by role"></select>
+          <select class="input" id="availabilityFilter" aria-label="Filter by availability"></select>
+          <span class="table-count" id="tableCount"></span>
+        </div>
+        <div id="leadsTable"></div>
+      </section>
+
+      <section class="card">
+        <h2>Who registered</h2>
+        <p class="card-sub">Leads in the selected period. "(not set)" means the value was empty.</p>
+        <div class="breakdown-grid" id="breakdowns"></div>
+      </section>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>

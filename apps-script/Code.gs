@@ -1,17 +1,20 @@
 /** @OnlyCurrentDoc */
 /**
- * ASTS Oracle FCCS Free Demo: saves registrations from the landing page.
+ * ASTS Oracle FCCS Free Demo: registrations and the private admin dashboard.
  *
  * ONE Google Apps Script Web App + ONE Google Sheet (the single source of truth):
  *
- *   FCCS landing page (index.html) --POST lead as JSON--> this script --> Google Sheet
+ *   FCCS landing page (index.html) --POST lead as JSON--------------> this script --> Google Sheet
+ *   admin dashboard (admin/) ------POST {action: 'dashboard', adminKey}--> this script <-- Google Sheet
  *
  * Tab (created by setup()):
  *   Leads  one row per saved registration
  *
- * The website can only add rows. Nothing in the Sheet is ever sent back.
+ * The website can only add rows. Leads are only ever sent back to a request
+ * that carries the admin key.
  *
  * Deploy: Deploy > New deployment > Web app > Execute as: Me > Who has access: Anyone.
+ * Admin key: Project Settings > Script properties > ADMIN_KEY (setup() creates one).
  * Full instructions: apps-script/README.md in the website project.
  */
 
@@ -43,12 +46,18 @@ const MAX_BODY_CHARS = 20000;
 // slow answer) gets the lead that was already saved instead of a second row
 const DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
 const DUPLICATE_ROWS_CHECKED = 50;
+const MIN_ADMIN_KEY_LENGTH = 24;
+const MAX_LEADS_RETURNED = 5000; // the dashboard gets the newest ones
 
 // ---------------------------------------------------------------------------
 // Web app entry points
 // ---------------------------------------------------------------------------
 
-/** Health check only: opening the /exec URL in a browser shows {"ok":true,...}. No data is returned. */
+/**
+ * Health check only: opening the /exec URL in a browser shows {"ok":true,...}.
+ * No data is ever returned here. Dashboard reads use POST because Apps Script
+ * cannot read request headers, and the admin key must never go in the URL.
+ */
 function doGet() {
   return json_({
     ok: true,
@@ -59,8 +68,9 @@ function doGet() {
 }
 
 /**
- * Saves one registration. The body is JSON sent as plain text, which browsers
- * can POST cross-origin without a CORS pre-check.
+ * Saves one registration (the website sends no action), or answers the admin
+ * dashboard (action: 'dashboard'). The body is JSON sent as plain text, which
+ * browsers can POST cross-origin without a CORS pre-check.
  */
 function doPost(e) {
   let request;
@@ -75,9 +85,10 @@ function doPost(e) {
   }
 
   try {
+    if (request.action === 'dashboard') return json_(dashboard_(request));
     return json_(saveLead_(request));
   } catch (err) {
-    // Never log the request itself: it holds personal details
+    // Never log the request itself: it can hold personal details or the admin key
     console.error('doPost failed: ' + (err && err.stack ? err.stack : err));
     return json_(fail_('Something went wrong on our side. Please try again.'));
   }
@@ -185,10 +196,65 @@ function newLeadId_(leads, when) {
 }
 
 // ---------------------------------------------------------------------------
+// action: 'dashboard'  (admin only)
+// ---------------------------------------------------------------------------
+
+function dashboard_(req) {
+  const denied = checkAdminKey_(req.adminKey);
+  if (denied) return denied;
+
+  const info = sheetInfo_(LEADS_SHEET, LEAD_HEADERS);
+  const C = info.columns;
+  const rows = rows_(info);
+  const leads = rows.slice(-MAX_LEADS_RETURNED).map(row => ({
+    t: millis_(row[C['Submitted At']]), // milliseconds, or null if the cell was edited into something else
+    leadId: cellText_(row, C['Lead ID']),
+    name: cellText_(row, C['Name']),
+    phone: cellText_(row, C['Phone']),
+    email: cellText_(row, C['Email']),
+    country: cellText_(row, C['Country']),
+    countryCode: cellText_(row, C['Country Code']),
+    role: cellText_(row, C['Role']),
+    availability: cellText_(row, C['Availability']),
+    course: cellText_(row, C['Course']),
+    utmSource: cellText_(row, C['UTM Source']),
+    utmMedium: cellText_(row, C['UTM Medium']),
+    utmCampaign: cellText_(row, C['UTM Campaign']),
+    utmTerm: cellText_(row, C['UTM Term']),
+    gclid: cellText_(row, C['GCLID']),
+    pageUrl: cellText_(row, C['Page URL'])
+  }));
+  return { ok: true, data: { leads: leads, total: rows.length } };
+}
+
+/** Returns null when the key is right, otherwise the failure to send back. */
+function checkAdminKey_(key) {
+  const expected = PropertiesService.getScriptProperties().getProperty('ADMIN_KEY') || '';
+  if (expected.length < MIN_ADMIN_KEY_LENGTH) {
+    return fail_('The dashboard is locked. Run setup() in Apps Script, or set ADMIN_KEY (at least ' +
+      MIN_ADMIN_KEY_LENGTH + ' characters) in Project Settings > Script properties.', { code: 'NOT_CONFIGURED' });
+  }
+  if (typeof key !== 'string' || !sameText_(key, expected)) return fail_('Wrong admin key.', { code: 'UNAUTHORIZED' });
+  return null;
+}
+
+// Compares every character, so the time taken does not reveal how much of a guess was right
+function sameText_(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+// ---------------------------------------------------------------------------
 // Setup (run once from the Apps Script editor)
 // ---------------------------------------------------------------------------
 
-/** Creates the Leads tab with its headers. Safe to run again: it never removes data. */
+/**
+ * Creates the Leads tab with its headers and, if there is none yet, a random
+ * ADMIN_KEY in Script properties. Safe to run again: it never removes data and
+ * never replaces an existing key.
+ */
 function setup() {
   const leads = sheetInfo_(LEADS_SHEET, LEAD_HEADERS);
   const sheet = leads.sheet;
@@ -197,7 +263,26 @@ function setup() {
   if (sheet.getMaxRows() > 1) {
     sheet.getRange(2, leads.columns['Submitted At'] + 1, sheet.getMaxRows() - 1, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
   }
+
+  const props = PropertiesService.getScriptProperties();
+  if ((props.getProperty('ADMIN_KEY') || '').length >= MIN_ADMIN_KEY_LENGTH) {
+    console.log('ADMIN_KEY already exists and was not changed.');
+  } else {
+    props.setProperty('ADMIN_KEY', newAdminKey_());
+    console.log('Created ADMIN_KEY. Copy it from Project Settings > Script properties.');
+  }
   console.log('Setup complete. The "' + LEADS_SHEET + '" tab is ready.');
+}
+
+/** Replaces the admin key (e.g. if it was shared by mistake). The old key stops working at once. */
+function rotateAdminKey() {
+  PropertiesService.getScriptProperties().setProperty('ADMIN_KEY', newAdminKey_());
+  console.log('Replaced ADMIN_KEY. Copy the new key from Project Settings > Script properties.');
+}
+
+// 64 random hex characters
+function newAdminKey_() {
+  return (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
 }
 
 // ---------------------------------------------------------------------------
@@ -261,6 +346,12 @@ function cell_(value) {
   return "'" + String(value);
 }
 
+function rows_(info) {
+  const last = info.sheet.getLastRow();
+  if (last < 2) return [];
+  return info.sheet.getRange(2, 1, last - 1, info.width).getValues();
+}
+
 // Row number (2+) whose cell under `header` equals `value` exactly, or 0
 function findRow_(info, header, value) {
   const last = info.sheet.getLastRow();
@@ -293,6 +384,15 @@ function cellText_(row, index) {
   if (index === undefined) return '';
   const value = row[index];
   return value === null || value === undefined ? '' : String(value).trim();
+}
+
+function millis_(value) {
+  if (value instanceof Date) return isNaN(value.getTime()) ? null : value.getTime();
+  if (typeof value === 'string' && value) {
+    const t = Date.parse(value);
+    return isNaN(t) ? null : t;
+  }
+  return null;
 }
 
 function fail_(message, extra) {

@@ -1,17 +1,21 @@
-# ASTS FCCS: Google Sheet + Apps Script
+# ASTS FCCS: Google Sheet + Apps Script + Admin Dashboard
 
 One Google Apps Script Web App and one Google Sheet save every registration from
-the FCCS landing page. The Sheet is the only source of truth.
+the FCCS landing page and show them in the private admin dashboard. The Sheet is
+the only source of truth.
 
 ```
 Visitor ──► FCCS landing page (index.html) ──POST──► Apps Script Web App ──► Google Sheet
                                                       (Code.gs)                (private)
+Admin Dashboard (admin/) ──────────────────POST──►  same Web App        ◄── same Sheet
 ```
 
 | File | What it is |
 | --- | --- |
 | `apps-script/Code.gs` | The complete Apps Script. Paste it into the Sheet's Apps Script editor. |
 | `index.html`, line 16 | The landing page: `ASTS_CONFIG.APPS_SCRIPT_URL` |
+| `admin/config.js`, line 8 | Admin Dashboard: `ADMIN_CONFIG.APPS_SCRIPT_URL` (the same URL) |
+| `admin/` | The private dashboard (static files, no data or secrets inside) |
 
 ---
 
@@ -93,7 +97,44 @@ Then publish the site. Until the real URL is there, the form says "The form is n
 Also worth trying once: open the page with ad tags, for example
 `?utm_source=google&utm_medium=cpc&utm_campaign=test&gclid=TEST123`, then register. The row shows those values.
 
-## 5. What the script accepts and answers
+## 5. Admin Dashboard
+
+The dashboard lists the registered leads with search, filters by role and availability, periods
+(Today … All Time, Custom), counts by role, country and source, and a CSV download.
+
+### Turn it on (once)
+
+The dashboard needs the latest `Code.gs` and an admin key.
+
+1. In the Apps Script editor, replace everything in `Code.gs` with the latest `apps-script/Code.gs` and **Save**.
+2. Choose **`setup`** in the function list and click **Run**. The log shows `Created ADMIN_KEY…`.
+   Your leads are not touched.
+3. Click **Project Settings** (gear icon, left) → **Script properties**. Copy the 64-character `ADMIN_KEY`
+   value and keep it in your password manager. This is the dashboard's password. Never put it in any file.
+4. **Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy.** The URL stays the same.
+
+### Open it
+
+- On the website: `https://<your site>/admin/` (keep the trailing slash).
+- Open it over `http://` or `https://`, not by double-clicking the file.
+- Type the admin key on the sign-in screen.
+
+### How it stays private
+
+- The admin key exists in one place: **Script properties → `ADMIN_KEY`**. It is not in GitHub, the website,
+  the dashboard files, a URL, or browser storage.
+- The key you type is kept only in that browser tab's memory. Reloading or closing the tab signs you out.
+- Every dashboard request is a POST with the key inside the HTTPS body. The script compares it with
+  `ADMIN_KEY` before it reads the Sheet. A wrong or missing key gets `Wrong admin key.` and no data.
+- The landing page's own requests need no key. They can only add rows, never read them.
+- The dashboard page itself is public but empty: it holds no leads and no key, and search engines are told
+  not to index it.
+- If the key is ever exposed: run **`rotateAdminKey`** in the Apps Script editor, then copy the new value
+  from Script properties. The old key stops working immediately.
+
+The dashboard refreshes every minute while it is on screen. It shows the newest 5,000 leads.
+
+## 6. What the script accepts and answers
 
 The page sends one POST with a JSON body (as plain text, so no CORS pre-check is needed):
 
@@ -111,10 +152,17 @@ gclid, utm_source, utm_medium, utm_campaign, utm_term, page_url, source, hp
 The script checks the same rules as the form (name, email, phone, role, consent). `hp` is the hidden
 spam field: anything in it means a bot, and nothing is saved.
 
-## 6. Troubleshooting
+The dashboard sends `{"action": "dashboard", "adminKey": "…"}` and gets back
+`{"ok": true, "data": {"leads": […], "total": n}}`, or `{"ok": false, "code": "UNAUTHORIZED", …}`.
+
+## 7. Troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
+| Dashboard says "The deployed Apps Script does not have the dashboard yet" | Do the four "Turn it on" steps in section 5 |
+| Dashboard says "Wrong admin key" | Copy `ADMIN_KEY` again from Script properties (no spaces) |
+| Dashboard says "The dashboard is locked" | Run `setup` once, or set `ADMIN_KEY` (24+ characters) in Script properties |
+| Dashboard page stays on "Loading…" | Open it through `http://` or `https://`, not by double-clicking the file |
 | Form says "The form is not connected yet" | `index.html` line 16 still has the placeholder |
 | Form says "We couldn't register you just now" | Check the `/exec` URL. Check the deployment has **Who has access: Anyone**. After code changes, deploy a **New version** |
 | Code changes have no effect | Deploy → Manage deployments → Edit → **New version** |
